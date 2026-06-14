@@ -3,10 +3,11 @@ import json
 import random
 from pathlib import Path
 
-import numpy as np
-import tensorflow as tf
-
-from dqn_train import append_frame, build_q_network, make_initial_state, preprocess_observation
+from dqn_train import (
+    build_q_network,
+    configure_tensorflow,
+    select_greedy_action,
+)
 from rl_env import SuperMarioPythonEnv
 
 
@@ -36,17 +37,16 @@ def choose_action(q_network, state, env, epsilon):
     if random.random() < epsilon:
         return env.action_space.sample()
 
-    q_values = q_network(np.expand_dims(state, axis=0), training=False)
-    return int(tf.argmax(q_values[0]).numpy())
+    return int(select_greedy_action(q_network, state).numpy())
 
 
 def play(args):
+    configure_tensorflow(args.device)
+
     run_dir = Path(args.run_dir)
     run_config = load_run_config(run_dir)
     model_path = resolve_model_path(run_dir, args.model_path)
 
-    image_size = args.image_size or int(run_config.get("image_size", 84))
-    stack_size = args.stack_size or int(run_config.get("stack_size", 4))
     frame_skip = args.frame_skip or int(run_config.get("frame_skip", 4))
     level_name = args.level_name or run_config.get("level_name", "Level1-1")
 
@@ -58,7 +58,7 @@ def play(args):
         fps=args.fps,
     )
 
-    input_shape = (image_size, image_size, stack_size)
+    input_shape = tuple(env.observation_space.shape)
     q_network = build_q_network(input_shape, env.action_space.n)
     q_network.load_weights(model_path)
 
@@ -68,16 +68,14 @@ def play(args):
     try:
         for episode in range(1, args.episodes + 1):
             obs, info = env.reset()
-            first_frame = preprocess_observation(obs, image_size)
-            frame_stack, state = make_initial_state(first_frame, stack_size)
+            state = obs
             episode_reward = 0.0
 
             for step in range(1, args.max_steps + 1):
                 action = choose_action(q_network, state, env, args.epsilon)
                 obs, reward, terminated, truncated, info = env.step(action)
 
-                frame = preprocess_observation(obs, image_size)
-                state = append_frame(frame_stack, frame)
+                state = obs
                 episode_reward += reward
 
                 if args.print_every and (step == 1 or step % args.print_every == 0 or terminated or truncated):
@@ -110,9 +108,13 @@ def parse_args():
     parser.add_argument("--fps", type=int, default=60, help="FPS cap in human render mode. Use 0 for uncapped.")
     parser.add_argument("--level-name", default="")
     parser.add_argument("--frame-skip", type=int, default=0)
-    parser.add_argument("--image-size", type=int, default=0)
-    parser.add_argument("--stack-size", type=int, default=0)
     parser.add_argument("--print-every", type=int, default=25)
+    parser.add_argument(
+        "--device",
+        choices=["auto", "gpu", "cpu"],
+        default="auto",
+        help="TensorFlow device selection. Use gpu to fail fast if no GPU is available.",
+    )
     return parser.parse_args()
 
 

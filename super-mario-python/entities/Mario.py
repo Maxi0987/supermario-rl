@@ -55,6 +55,7 @@ class Mario(EntityBase):
         self.terminal_animation = terminal_animation
         self.inAir = False
         self.inJump = False
+        self.enemy_points = 0
         self.powerUpState = 0
         self.invincibilityFrames = 0
         self.traits = {
@@ -167,6 +168,7 @@ class Mario(EntityBase):
         self.traits["bounceTrait"].jump = True
 
     def killEntity(self, ent):
+        is_enemy = ent.type == "Mob" and not isinstance(ent, RedMushroom)
         if ent.__class__.__name__ != "Koopa":
             ent.alive = False
         else:
@@ -176,6 +178,8 @@ class Mario(EntityBase):
             ent.active = False
             ent.bouncing = False
         self.dashboard.points += 100
+        if is_enemy:
+            self.enemy_points += 100
 
     def gameOver(self):
         if not self.terminal_animation:

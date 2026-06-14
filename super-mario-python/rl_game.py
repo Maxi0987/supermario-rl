@@ -74,6 +74,7 @@ class MarioGame:
         self.sound = None
         self.level = None
         self.mario = None
+        self.last_action_index = -1
         self.last_reward_parts = {}
 
         self._init_pygame()
@@ -118,21 +119,24 @@ class MarioGame:
                 terminal_animation=False,
             )
 
+        self.last_action_index = -1
         self.draw()
         return self.get_observation()
 
     def step(self, action):
         pygame.event.pump()
+        self.last_action_index = int(action.get("index", -1))
 
         previous_x = self.x_pos
         previous_score = self.dashboard.points
+        previous_enemy_points = self.mario.enemy_points
         previous_coins = self.dashboard.coins
 
         self.draw()
         self.mario.update(action=action, process_input=False)
 
         terminated = self.is_dead or self.is_finished
-        reward = self._reward(previous_x, previous_score, previous_coins, terminated)
+        reward = self._reward(previous_x, previous_score, previous_enemy_points, previous_coins, terminated)
         info = self.info()
         info["reward_parts"] = self.last_reward_parts
 
@@ -148,25 +152,52 @@ class MarioGame:
         self.level.drawLevel(self.mario.camera)
         self.dashboard.update()
 
-    def get_observation(self):
+    def get_frame(self):
         frame = pygame.surfarray.array3d(self.screen)
         return np.transpose(frame, (1, 0, 2)).astype(np.uint8)
+
+    def get_observation(self):
+        features = []
+        level_width = max(1.0, float(self.level.levelLength * 32))
+        level_height = max(1.0, float(len(self.level.level) * 32))
+
+        features.extend(
+            [
+                self._clip(self.mario.rect.x / level_width),
+                self._clip(self.mario.rect.y / level_height),
+                self._clip(self.mario.vel.x / 5.0),
+                self._clip(self.mario.vel.y / 15.0),
+                1.0 if self.mario.onGround else 0.0,
+                1.0 if self.mario.inJump else 0.0,
+                self._clip(float(self.mario.powerUpState)),
+                self._clip((level_width - self.mario.rect.x) / level_width),
+            ]
+        )
+
+        features.extend(self._last_action_features())
+        features.extend(self._local_tile_features())
+        features.extend(self._nearest_mob_features())
+
+        return np.asarray(features, dtype=np.float32)
 
     def render(self):
         if self.render_mode == "human":
             pygame.display.update()
             return None
-        return self.get_observation()
+        return self.get_frame()
 
     def close(self):
         pygame.quit()
 
-    def _reward(self, previous_x, previous_score, previous_coins, terminated):
+    def _reward(self, previous_x, previous_score, previous_enemy_points, previous_coins, terminated):
         x_delta = self.x_pos - previous_x
         x_reward = max(0.0, x_delta) * 2.0
-        score_reward = (self.dashboard.points - previous_score) * 0.001
+        score_delta = self.dashboard.points - previous_score
+        enemy_score_delta = self.mario.enemy_points - previous_enemy_points
+        non_enemy_score_delta = max(0, score_delta - enemy_score_delta)
+        score_reward = non_enemy_score_delta * 0.001
         coin_reward = (self.dashboard.coins - previous_coins) * 5.0
-        time_penalty = -0.01
+        time_penalty = -0.1
         death_penalty = -25.0 if self.is_dead else 0.0
         finish_bonus = 100.0 if self.is_finished and terminated else 0.0
         total_reward = x_reward + score_reward + coin_reward + time_penalty + death_penalty + finish_bonus
@@ -175,6 +206,7 @@ class MarioGame:
             "x_delta": float(x_delta),
             "x_reward": float(x_reward),
             "score_reward": float(score_reward),
+            "enemy_score_ignored": float(enemy_score_delta),
             "coin_reward": float(coin_reward),
             "time_penalty": float(time_penalty),
             "death_penalty": float(death_penalty),
@@ -207,3 +239,62 @@ class MarioGame:
             "dead": self.is_dead,
             "finished": self.is_finished,
         }
+
+    def _last_action_features(self):
+        features = [0.0] * 8
+        if 0 <= self.last_action_index < len(features):
+            features[self.last_action_index] = 1.0
+        return features
+
+    def _local_tile_features(self):
+        mario_tile_x = self.mario.rect.x // 32
+        mario_tile_y = self.mario.rect.y // 32
+        features = []
+
+        for y_offset in (-2, -1, 0, 1):
+            for x_offset in (-1, 0, 1, 2, 3):
+                x = int(mario_tile_x + x_offset)
+                y = int(mario_tile_y + y_offset)
+                features.append(1.0 if self._is_solid_tile(x, y) else 0.0)
+
+        return features
+
+    def _is_solid_tile(self, x, y):
+        if x < 0 or x >= self.level.levelLength:
+            return True
+        if y < 0:
+            return False
+        if y >= len(self.level.level):
+            return True
+        return self.level.level[y][x].rect is not None
+
+    def _nearest_mob_features(self):
+        mobs = [
+            entity
+            for entity in self.level.entityList
+            if entity.type == "Mob" and entity.alive is not None
+        ]
+        mobs.sort(key=lambda entity: abs(entity.rect.x - self.mario.rect.x))
+
+        features = []
+        for mob in mobs[:2]:
+            dx = (mob.rect.x - self.mario.rect.x) / (10.0 * 32)
+            dy = (mob.rect.y - self.mario.rect.y) / (5.0 * 32)
+            features.extend(
+                [
+                    self._clip(dx),
+                    self._clip(dy),
+                    self._clip(mob.vel.x / 5.0),
+                    1.0 if mob.alive else 0.0,
+                    1.0 if mob.active else 0.0,
+                ]
+            )
+
+        while len(features) < 10:
+            features.append(0.0)
+
+        return features
+
+    @staticmethod
+    def _clip(value):
+        return float(np.clip(value, -1.0, 1.0))

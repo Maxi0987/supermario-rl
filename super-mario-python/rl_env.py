@@ -38,12 +38,11 @@ class SuperMarioPythonEnv(gym.Env):
         self.steps = 0
         self.game = None
 
-        width, height = WINDOW_SIZE
         self.observation_space = gym.spaces.Box(
-            low=0,
-            high=255,
-            shape=(height, width, 3),
-            dtype=np.uint8,
+            low=-1.0,
+            high=1.0,
+            shape=(46,),
+            dtype=np.float32,
         )
         self.action_space = gym.spaces.Discrete(len(ACTION_MAP))
 
@@ -65,7 +64,9 @@ class SuperMarioPythonEnv(gym.Env):
 
     def step(self, action):
         self.steps += 1
-        action_dict = ACTION_MAP[int(action)]
+        action_index = int(action)
+        action_dict = dict(ACTION_MAP[action_index])
+        action_dict["index"] = action_index
         total_reward = 0.0
         terminated = False
         info = {}

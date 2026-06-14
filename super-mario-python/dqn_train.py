@@ -2,7 +2,6 @@ import argparse
 import csv
 import json
 import random
-from collections import deque
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -15,27 +14,26 @@ from rl_env import SuperMarioPythonEnv
 
 @dataclass
 class DQNConfig:
-    episodes: int = 500
-    max_steps: int = 1500
+    episodes: int = 10000
+    max_steps: int = 3000
     frame_skip: int = 4
-    image_size: int = 84
-    stack_size: int = 4
-    replay_capacity: int = 50000
-    warmup_steps: int = 2000
-    batch_size: int = 32
+    replay_capacity: int = 250000
+    warmup_steps: int = 10000
+    batch_size: int = 64
     gamma: float = 0.99
-    learning_rate: float = 0.00025
+    learning_rate: float = 0.0001
     train_every: int = 4
-    target_update_every: int = 1000
+    target_update_every: int = 5000
     epsilon_start: float = 1.0
     epsilon_end: float = 0.05
-    epsilon_decay_steps: int = 100000
-    save_every: int = 10
+    epsilon_decay_steps: int = 1500000
+    save_every: int = 250
     level_name: str = "Level1-1"
     output_dir: str = "training_runs"
     run_name: str = ""
-    render_mode: str = "human"
+    render_mode: str = "rgb_array"
     fps: int = 0
+    device: str = "auto"
     seed: int = 42
 
 
@@ -43,8 +41,8 @@ class ReplayBuffer:
     def __init__(self, capacity, state_shape):
         self.capacity = capacity
         self.state_shape = state_shape
-        self.states = np.zeros((capacity, *state_shape), dtype=np.uint8)
-        self.next_states = np.zeros((capacity, *state_shape), dtype=np.uint8)
+        self.states = np.zeros((capacity, *state_shape), dtype=np.float32)
+        self.next_states = np.zeros((capacity, *state_shape), dtype=np.float32)
         self.actions = np.zeros(capacity, dtype=np.int32)
         self.rewards = np.zeros(capacity, dtype=np.float32)
         self.dones = np.zeros(capacity, dtype=np.bool_)
@@ -75,35 +73,43 @@ class ReplayBuffer:
         return self.size
 
 
-def preprocess_observation(obs, image_size):
-    frame = tf.convert_to_tensor(obs, dtype=tf.uint8)
-    frame = tf.image.rgb_to_grayscale(frame)
-    frame = tf.image.resize(frame, (image_size, image_size), method="area")
-    frame = tf.cast(tf.squeeze(frame, axis=-1), tf.uint8)
-    return frame.numpy()
+def configure_tensorflow(device):
+    gpus = tf.config.list_physical_devices("GPU")
 
+    if device == "cpu":
+        if gpus:
+            tf.config.set_visible_devices([], "GPU")
+        print("TensorFlow device: CPU (GPU disabled by --device cpu)")
+        return "CPU"
 
-def make_initial_state(frame, stack_size):
-    frames = deque(maxlen=stack_size)
-    for _ in range(stack_size):
-        frames.append(frame)
-    return frames, np.stack(frames, axis=-1)
+    if gpus:
+        for gpu in gpus:
+            try:
+                tf.config.experimental.set_memory_growth(gpu, True)
+            except RuntimeError as error:
+                print(f"Could not set GPU memory growth for {gpu.name}: {error}")
 
+        logical_gpus = tf.config.list_logical_devices("GPU")
+        gpu_names = ", ".join(gpu.name for gpu in logical_gpus) or ", ".join(gpu.name for gpu in gpus)
+        print(f"TensorFlow device: GPU ({gpu_names})")
+        return "GPU"
 
-def append_frame(frames, frame):
-    frames.append(frame)
-    return np.stack(frames, axis=-1)
+    if device == "gpu":
+        raise RuntimeError(
+            "No TensorFlow GPU device found. Install a GPU-enabled TensorFlow build "
+            "and matching NVIDIA/CUDA drivers, or use --device auto/cpu."
+        )
+
+    print("TensorFlow device: CPU (no GPU visible to TensorFlow)")
+    return "CPU"
 
 
 def build_q_network(input_shape, num_actions):
     num_actions = int(num_actions)
     inputs = tf.keras.Input(shape=input_shape)
-    x = tf.keras.layers.Rescaling(1.0 / 255.0)(inputs)
-    x = tf.keras.layers.Conv2D(32, 8, strides=4, activation="relu")(x)
-    x = tf.keras.layers.Conv2D(64, 4, strides=2, activation="relu")(x)
-    x = tf.keras.layers.Conv2D(64, 3, strides=1, activation="relu")(x)
-    x = tf.keras.layers.Flatten()(x)
-    x = tf.keras.layers.Dense(512, activation="relu")(x)
+    x = tf.keras.layers.Dense(128, activation="relu")(inputs)
+    x = tf.keras.layers.Dense(128, activation="relu")(x)
+    x = tf.keras.layers.Dense(64, activation="relu")(x)
     outputs = tf.keras.layers.Dense(num_actions)(x)
     return tf.keras.Model(inputs=inputs, outputs=outputs, name="mario_dqn")
 
@@ -113,7 +119,14 @@ def epsilon_by_step(config, global_step):
     return config.epsilon_start + fraction * (config.epsilon_end - config.epsilon_start)
 
 
-@tf.function
+@tf.function(reduce_retracing=True)
+def select_greedy_action(q_network, state):
+    state = tf.expand_dims(tf.cast(state, tf.float32), axis=0)
+    q_values = q_network(state, training=False)
+    return tf.argmax(q_values[0], output_type=tf.int32)
+
+
+@tf.function(reduce_retracing=True)
 def train_step(q_network, target_network, optimizer, states, actions, rewards, next_states, dones, gamma):
     states = tf.cast(states, tf.float32)
     next_states = tf.cast(next_states, tf.float32)
@@ -160,7 +173,9 @@ CSV_FIELDS = [
     "coins",
     "x_reward",
     "score_reward",
+    "enemy_score_ignored",
     "coin_reward",
+    "time_penalty",
     "death_penalty",
     "finish_bonus",
     "dead",
@@ -215,6 +230,8 @@ def save_model_snapshot(q_network, run_dir, episode):
 
 
 def train(config):
+    configure_tensorflow(config.device)
+
     random.seed(config.seed)
     np.random.seed(config.seed)
     tf.random.set_seed(config.seed)
@@ -232,7 +249,7 @@ def train(config):
     )
     save_run_metadata(run_dir, config, env)
 
-    input_shape = (config.image_size, config.image_size, config.stack_size)
+    input_shape = tuple(env.observation_space.shape)
     q_network = build_q_network(input_shape, env.action_space.n)
     target_network = build_q_network(input_shape, env.action_space.n)
     target_network.set_weights(q_network.get_weights())
@@ -245,8 +262,7 @@ def train(config):
     try:
         for episode in range(1, config.episodes + 1):
             obs, info = env.reset()
-            first_frame = preprocess_observation(obs, config.image_size)
-            frame_stack, state = make_initial_state(first_frame, config.stack_size)
+            state = obs.astype(np.float32, copy=False)
 
             episode_reward = 0.0
             losses = []
@@ -258,12 +274,10 @@ def train(config):
                 if random.random() < epsilon:
                     action = env.action_space.sample()
                 else:
-                    q_values = q_network(np.expand_dims(state, axis=0), training=False)
-                    action = int(tf.argmax(q_values[0]).numpy())
+                    action = int(select_greedy_action(q_network, state).numpy())
 
                 next_obs, reward, terminated, truncated, info = env.step(action)
-                next_frame = preprocess_observation(next_obs, config.image_size)
-                next_state = append_frame(frame_stack, next_frame)
+                next_state = next_obs.astype(np.float32, copy=False)
                 done = terminated or truncated
 
                 replay_buffer.add(state, action, reward, next_state, done)
@@ -308,7 +322,9 @@ def train(config):
                 "coins": int(info.get("coins", 0)),
                 "x_reward": round(float(reward_parts.get("x_reward", 0.0)), 4),
                 "score_reward": round(float(reward_parts.get("score_reward", 0.0)), 4),
+                "enemy_score_ignored": round(float(reward_parts.get("enemy_score_ignored", 0.0)), 4),
                 "coin_reward": round(float(reward_parts.get("coin_reward", 0.0)), 4),
+                "time_penalty": round(float(reward_parts.get("time_penalty", 0.0)), 4),
                 "death_penalty": round(float(reward_parts.get("death_penalty", 0.0)), 4),
                 "finish_bonus": round(float(reward_parts.get("finish_bonus", 0.0)), 4),
                 "dead": bool(info.get("dead", False)),
@@ -360,6 +376,12 @@ def parse_args():
     parser.add_argument("--run-name", default=defaults.run_name)
     parser.add_argument("--render-mode", choices=["rgb_array", "human"], default=defaults.render_mode)
     parser.add_argument("--fps", type=int, default=defaults.fps, help="FPS cap in human render mode. Use 0 for uncapped.")
+    parser.add_argument(
+        "--device",
+        choices=["auto", "gpu", "cpu"],
+        default=defaults.device,
+        help="TensorFlow device selection. Use gpu to fail fast if no GPU is available.",
+    )
     parser.add_argument("--seed", type=int, default=defaults.seed)
     return parser.parse_args()
 

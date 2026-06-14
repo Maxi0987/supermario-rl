@@ -28,9 +28,11 @@ env.close()
 ```
 
 The action space is discrete and maps to `NOOP`, left/right movement, jump, and
-run+jump combinations. Observations are RGB frames with shape `(480, 640, 3)`.
-The reward primarily favors rightward progress. Score rewards, including enemy
-points, are intentionally small to reduce reward farming.
+run+jump combinations. Observations are normalized vector states with shape
+`(46,)`, including Mario state, the previous action, nearby solid tiles, and the
+nearest mobs. `render()` still returns RGB frames in `rgb_array` mode. The reward
+primarily favors rightward progress. Score rewards, including enemy points, are
+intentionally small to reduce reward farming.
 
 ## Deep Q-Learning
 
