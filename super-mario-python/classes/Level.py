@@ -5,9 +5,7 @@ from classes.Sprites import Sprites
 from classes.Tile import Tile
 from entities.Coin import Coin
 from entities.CoinBrick import CoinBrick
-from entities.Goomba import Goomba
 from entities.Mushroom import RedMushroom
-from entities.Koopa import Koopa
 from entities.CoinBox import CoinBox
 from entities.RandomBox import RandomBox
 
@@ -33,8 +31,6 @@ class Level:
     def loadEntities(self, data):
         try:
             [self.addCoinBox(x, y) for x, y in data["level"]["entities"]["CoinBox"]]
-            [self.addGoomba(x, y) for x, y in data["level"]["entities"]["Goomba"]]
-            [self.addKoopa(x, y) for x, y in data["level"]["entities"]["Koopa"]]
             [self.addCoin(x, y) for x, y in data["level"]["entities"]["coin"]]
             [self.addCoinBrick(x, y) for x, y in data["level"]["entities"]["coinBrick"]]
             [self.addRandomBox(x, y, item) for x, y, item in data["level"]["entities"]["RandomBox"]]
@@ -187,16 +183,6 @@ class Level:
                 self.sound,
                 self.dashboard
             )
-        )
-
-    def addGoomba(self, x, y):
-        self.entityList.append(
-            Goomba(self.screen, self.sprites.spriteCollection, x, y, self, self.sound)
-        )
-
-    def addKoopa(self, x, y):
-        self.entityList.append(
-            Koopa(self.screen, self.sprites.spriteCollection, x, y, self, self.sound)
         )
 
     def addRedMushroom(self, x, y):

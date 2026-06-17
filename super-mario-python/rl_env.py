@@ -1,7 +1,7 @@
 import gymnasium as gym
 import numpy as np
 
-from rl_game import MarioGame, WINDOW_SIZE
+from rl_game import MarioGame, OBSERVATION_SIZE, WINDOW_SIZE
 
 
 ACTION_MAP = [
@@ -23,7 +23,7 @@ class SuperMarioPythonEnv(gym.Env):
         self,
         level_name="Level1-1",
         render_mode="rgb_array",
-        frame_skip=4,
+        frame_skip=2,
         max_steps=5000,
         fps=0,
         sound=False,
@@ -41,7 +41,7 @@ class SuperMarioPythonEnv(gym.Env):
         self.observation_space = gym.spaces.Box(
             low=-1.0,
             high=1.0,
-            shape=(46,),
+            shape=(OBSERVATION_SIZE,),
             dtype=np.float32,
         )
         self.action_space = gym.spaces.Discrete(len(ACTION_MAP))

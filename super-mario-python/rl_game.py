@@ -8,6 +8,28 @@ import pygame
 
 WINDOW_SIZE = (640, 480)
 
+# Reward weights. Tune these in one place.
+# Keep per-step rewards roughly in O(1) so the Q-values stay learnable, and make
+# death/finish clearly dominate the small forward signal.
+X_REWARD_SCALE = 0.1        # reward per pixel moved right (was 2.0 -> returns in the thousands)
+SCORE_REWARD_SCALE = 0.001  # non-enemy score points (e.g. bricks)
+COIN_REWARD = 1.0           # per coin collected (was 5.0)
+TIME_PENALTY = -0.1         # per env step, discourages standing still
+DEATH_PENALTY = -15.0       # falling into a pit / dying (was -25.0, dwarfed by x_reward)
+FINISH_BONUS = 50.0         # reaching the end of the level (was 100.0)
+JUMP_PENALTY = -0.05        # per jump actually launched from the ground; makes the
+                            # agent jump deliberately (at pits) instead of bunny-hopping
+                            # constantly. Keep small: crossing a pit avoids DEATH_PENALTY,
+                            # so a few jumps must stay far cheaper than dying.
+
+# Local solid-tile grid around Mario (in tile units, relative to his tile).
+# Reaching further to the right lets the agent see pits in time to plan a jump.
+TILE_X_OFFSETS = (-1, 0, 1, 2, 3, 4, 5, 6)  # was up to +3; now 6 tiles ahead
+TILE_Y_OFFSETS = (-2, -1, 0, 1)
+
+# Observation layout: 8 Mario-state + 8 last-action one-hot + tile grid + 10 mob features.
+OBSERVATION_SIZE = 8 + 8 + len(TILE_X_OFFSETS) * len(TILE_Y_OFFSETS) + 10
+
 
 class _NullChannel:
     def play(self, *args, **kwargs):
@@ -132,11 +154,17 @@ class MarioGame:
         previous_enemy_points = self.mario.enemy_points
         previous_coins = self.dashboard.coins
 
+        # A jump is only launched when Mario is on the ground (see JumpTrait.jump),
+        # so this counts deliberate take-offs, not the unavoidable airtime that follows.
+        jump_launched = bool(action.get("jump", False)) and self.mario.onGround
+
         self.draw()
         self.mario.update(action=action, process_input=False)
 
         terminated = self.is_dead or self.is_finished
-        reward = self._reward(previous_x, previous_score, previous_enemy_points, previous_coins, terminated)
+        reward = self._reward(
+            previous_x, previous_score, previous_enemy_points, previous_coins, terminated, jump_launched
+        )
         info = self.info()
         info["reward_parts"] = self.last_reward_parts
 
@@ -189,18 +217,21 @@ class MarioGame:
     def close(self):
         pygame.quit()
 
-    def _reward(self, previous_x, previous_score, previous_enemy_points, previous_coins, terminated):
+    def _reward(self, previous_x, previous_score, previous_enemy_points, previous_coins, terminated, jump_launched=False):
         x_delta = self.x_pos - previous_x
-        x_reward = max(0.0, x_delta) * 2.0
+        x_reward = max(0.0, x_delta) * X_REWARD_SCALE
         score_delta = self.dashboard.points - previous_score
         enemy_score_delta = self.mario.enemy_points - previous_enemy_points
         non_enemy_score_delta = max(0, score_delta - enemy_score_delta)
-        score_reward = non_enemy_score_delta * 0.001
-        coin_reward = (self.dashboard.coins - previous_coins) * 5.0
-        time_penalty = -0.1
-        death_penalty = -25.0 if self.is_dead else 0.0
-        finish_bonus = 100.0 if self.is_finished and terminated else 0.0
-        total_reward = x_reward + score_reward + coin_reward + time_penalty + death_penalty + finish_bonus
+        score_reward = non_enemy_score_delta * SCORE_REWARD_SCALE
+        coin_reward = (self.dashboard.coins - previous_coins) * COIN_REWARD
+        time_penalty = TIME_PENALTY
+        jump_penalty = JUMP_PENALTY if jump_launched else 0.0
+        death_penalty = DEATH_PENALTY if self.is_dead else 0.0
+        finish_bonus = FINISH_BONUS if self.is_finished and terminated else 0.0
+        total_reward = (
+            x_reward + score_reward + coin_reward + time_penalty + jump_penalty + death_penalty + finish_bonus
+        )
 
         self.last_reward_parts = {
             "x_delta": float(x_delta),
@@ -209,6 +240,7 @@ class MarioGame:
             "enemy_score_ignored": float(enemy_score_delta),
             "coin_reward": float(coin_reward),
             "time_penalty": float(time_penalty),
+            "jump_penalty": float(jump_penalty),
             "death_penalty": float(death_penalty),
             "finish_bonus": float(finish_bonus),
             "total_reward": float(total_reward),
@@ -251,8 +283,8 @@ class MarioGame:
         mario_tile_y = self.mario.rect.y // 32
         features = []
 
-        for y_offset in (-2, -1, 0, 1):
-            for x_offset in (-1, 0, 1, 2, 3):
+        for y_offset in TILE_Y_OFFSETS:
+            for x_offset in TILE_X_OFFSETS:
                 x = int(mario_tile_x + x_offset)
                 y = int(mario_tile_y + y_offset)
                 features.append(1.0 if self._is_solid_tile(x, y) else 0.0)

@@ -16,7 +16,7 @@ from rl_env import SuperMarioPythonEnv
 class DQNConfig:
     episodes: int = 10000
     max_steps: int = 3000
-    frame_skip: int = 4
+    frame_skip: int = 1
     replay_capacity: int = 250000
     warmup_steps: int = 10000
     batch_size: int = 64
@@ -26,7 +26,7 @@ class DQNConfig:
     target_update_every: int = 5000
     epsilon_start: float = 1.0
     epsilon_end: float = 0.05
-    epsilon_decay_steps: int = 1500000
+    epsilon_decay_steps: int = 400000
     save_every: int = 250
     level_name: str = "Level1-1"
     output_dir: str = "training_runs"
@@ -176,6 +176,7 @@ CSV_FIELDS = [
     "enemy_score_ignored",
     "coin_reward",
     "time_penalty",
+    "jump_penalty",
     "death_penalty",
     "finish_bonus",
     "dead",
@@ -325,6 +326,7 @@ def train(config):
                 "enemy_score_ignored": round(float(reward_parts.get("enemy_score_ignored", 0.0)), 4),
                 "coin_reward": round(float(reward_parts.get("coin_reward", 0.0)), 4),
                 "time_penalty": round(float(reward_parts.get("time_penalty", 0.0)), 4),
+                "jump_penalty": round(float(reward_parts.get("jump_penalty", 0.0)), 4),
                 "death_penalty": round(float(reward_parts.get("death_penalty", 0.0)), 4),
                 "finish_bonus": round(float(reward_parts.get("finish_bonus", 0.0)), 4),
                 "dead": bool(info.get("dead", False)),
