@@ -1,0 +1,10 @@
+[
+  "NOOP",
+  "LEFT",
+  "RIGHT",
+  "JUMP",
+  "LEFT_JUMP",
+  "RIGHT_JUMP",
+  "RIGHT_RUN",
+  "RIGHT_RUN_JUMP"
+]

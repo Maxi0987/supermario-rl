@@ -1,0 +1,2 @@
+timestamp,episode,global_step,episode_steps,episode_reward,epsilon,avg_loss,replay_size,x_pos,score,coins,x_reward,score_reward,enemy_score_ignored,coin_reward,time_penalty,death_penalty,finish_bonus,dead,finished,model_path
+2026-06-16T20:33:27,1,394,394,3737.5,0.99975,0.0,394,1561.0,900,9,2.0,0.0,0.0,0.0,-0.1,-25.0,0.0,True,False,
